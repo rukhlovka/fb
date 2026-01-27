@@ -1,156 +1,226 @@
 (async () => {
   // === Налаштування ===
-  const STEP_PX = 1600;
-  const STEPS_PER_BATCH = 6;
-  const STEP_DELAY_MS = 250;
-  const REST_AFTER_BATCH_MS = 2200;
-  const WAIT_NEW_TIMEOUT_MS = 3000;
-  const BOUNCE_BACK_PX = 3200;
+  const LABELS = ['Запросити','Invite','Пригласить','Запросить'];
+  const CLICK_DELAY_MS = 1400;
+
+  // скрол-параметри
+  const STEP_PX = 1600;               // крок в середині пакету
+  const STEPS_PER_BATCH = 6;          // к-сть кроків у пакеті
+  const STEP_DELAY_MS = 250;          // пауза між кроками
+  const REST_AFTER_BATCH_MS = 2200;   // пауза після пакету (дає час підвантажити)
+  const WAIT_NEW_TIMEOUT_MS = 3000;   // скільки чекаємо появу нових кнопок
+  const BOUNCE_BACK_PX = 3200;        // відскок вгору, якщо вже дно
   const HARD_STOP_MS = 15 * 60_000;
 
-  const LABELS = ['Запросити', 'Invite', 'Пригласить', 'Запросить', 'Запрошення надіслано'];
-  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-  const log = (...a)=>console.log('%cFB Scroll:', 'color:#3b82f6', ...a);
+  const log = (...a)=>console.log('%cFB Inviter:', 'color:#22c55e', ...a);
 
-  let running = true;
-  let paused = false;
+  // --- Пауза / стоп ---
+  let PAUSED = false;
+  let STOPPED = false;
 
-  // === Хелпер очікування паузи ===
-  const waitWhilePaused = async () => {
-    while (paused && running) {
-      await sleep(200);
-    }
-  };
-
-  // === STOP кнопка ===
-  const stopBtn = document.createElement('button');
-  stopBtn.textContent = '⏹ STOP';
-  Object.assign(stopBtn.style, {
-    position: 'fixed',
-    top: '20px',
-    right: '20px',
-    zIndex: 999999,
-    padding: '10px 16px',
-    background: '#ef4444',
-    color: 'white',
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    boxShadow: '0 0 8px rgba(0,0,0,0.2)'
-  });
-  stopBtn.onclick = () => {
-    running = false;
-    paused = false;
-    stopBtn.textContent = '⏹ Зупинено';
-    stopBtn.style.background = '#555';
-    pauseBtn.style.display = 'none';
-  };
-  document.body.appendChild(stopBtn);
-
-  // === PAUSE / RESUME кнопка ===
+  // --- UI: кнопка Pause/Resume ---
   const pauseBtn = document.createElement('button');
-  pauseBtn.textContent = '⏸ Пауза';
+  pauseBtn.innerText = '⏸ Pause';
   Object.assign(pauseBtn.style, {
     position: 'fixed',
-    top: '70px',
-    right: '20px',
+    right: '16px',
+    top: '40%',
     zIndex: 999999,
-    padding: '10px 16px',
-    background: '#f59e0b',
-    color: 'white',
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
+    padding: '12px 16px',
     fontSize: '14px',
-    boxShadow: '0 0 8px rgba(0,0,0,0.2)'
+    fontWeight: '600',
+    borderRadius: '10px',
+    border: 'none',
+    cursor: 'pointer',
+    background: '#22c55e',
+    color: '#0f172a',
+    boxShadow: '0 6px 18px rgba(0,0,0,.25)',
+    transition: 'all .2s ease'
   });
   pauseBtn.onclick = () => {
-    paused = !paused;
-    pauseBtn.textContent = paused ? '▶️ Продовжити' : '⏸ Пауза';
-    pauseBtn.style.background = paused ? '#22c55e' : '#f59e0b';
-    log(paused ? '⏸ Пауза' : '▶️ Продовжено');
+    PAUSED = !PAUSED;
+    pauseBtn.innerText = PAUSED ? '▶️ Resume' : '⏸ Pause';
+    pauseBtn.style.background = PAUSED ? '#facc15' : '#22c55e';
+    log(PAUSED ? '⏸ PAUSE (button)' : '▶️ RESUME (button)');
   };
   document.body.appendChild(pauseBtn);
 
-  // === Hotkey: SPACE ===
-  document.addEventListener('keydown', e => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      pauseBtn.click();
-    }
-  });
+  // --- Клавіші: P = pause/resume, Q = stop ---
+  const onKey = (e) => {
+    // не чіпаємо набір тексту в інпутах
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || e.isComposing) return;
 
-  // === Utils ===
+    if (e.key === 'p' || e.key === 'P') {
+      PAUSED = !PAUSED;
+      pauseBtn.innerText = PAUSED ? '▶️ Resume' : '⏸ Pause';
+      pauseBtn.style.background = PAUSED ? '#facc15' : '#22c55e';
+      log(PAUSED ? '⏸ PAUSE (key)' : '▶️ RESUME (key)');
+    }
+    if (e.key === 'q' || e.key === 'Q') {
+      STOPPED = true;
+      log('🛑 STOP requested (finishing...)');
+    }
+  };
+  window.addEventListener('keydown', onKey, true);
+
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+  // сон, який поважає паузу + дає швидко зупинити
+  const sleepRespectingPause = async (ms) => {
+    const end = performance.now() + ms;
+    while (!STOPPED && performance.now() < end) {
+      while (!STOPPED && PAUSED) {
+        await sleep(200);
+      }
+      // маленькими кроками, щоб швидко реагувати на pause/stop
+      await sleep(120);
+    }
+  };
+
   const isVisible = el => {
     if (!el) return false;
     const r = el.getBoundingClientRect(), s = getComputedStyle(el);
     return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.opacity!=='0';
   };
 
+  // шукаємо всі кнопки "Запросити" по всьому document
   const findInviteButtons = () => {
-    const btns = [...document.querySelectorAll('[role="button"]')];
+    const btns = [...document.querySelectorAll('[role="button"]:not([aria-disabled="true"])')];
     return btns.filter(b=>{
       const t = (b.getAttribute('aria-label') || b.innerText || '').trim();
-      return isVisible(b) && LABELS.some(l => t === l || t.includes(l));
+      return isVisible(b) && LABELS.some(l => t===l || t.includes(l));
     });
   };
 
-  const firstBtns = findInviteButtons();
-  if (!firstBtns.length) {
-    log('⚠️ Не бачу кнопок. Зроби ручний скрол і перезапусти.');
-    return;
-  }
-
+  // знаходимо СПРАВЖНІЙ скролер: піднімаємось від першої кнопки вгору
   const findScrollerFrom = (el) => {
     let p = el;
     while (p && p !== document.body) {
       const st = getComputedStyle(p);
-      if (/(auto|scroll)/.test(st.overflowY) || p.scrollHeight > p.clientHeight+50) return p;
+      const can = (/(auto|scroll)/.test(st.overflowY) || p.scrollHeight > p.clientHeight+50);
+      if (can) return p;
       p = p.parentElement;
     }
     return document.scrollingElement || document.documentElement;
   };
 
-  const SCROLLER = findScrollerFrom(firstBtns[0]);
-  log('🎯 Скролер знайдено:', SCROLLER === document.scrollingElement ? 'window' : SCROLLER.tagName);
-  SCROLLER.style.outline = '2px solid #3b82f6';
-
-  const waitForNewNodes = (timeoutMs) => new Promise(resolve=>{
+  // чекаємо на появу нових кнопок (або таймаут)
+  const waitForNewButtonsOrTimeout = (timeoutMs) => new Promise(resolve=>{
+    const startCount = findInviteButtons().length;
     let done = false;
-    const timer = setTimeout(()=>{ if(!done){done=true; obs.disconnect(); resolve(false);} }, timeoutMs);
+    const timer = setTimeout(()=>{ if(!done){ done=true; obs.disconnect(); resolve(false); } }, timeoutMs);
     const obs = new MutationObserver(()=>{
-      if (!done) { done=true; clearTimeout(timer); obs.disconnect(); resolve(true); }
+      const now = findInviteButtons().length;
+      if (now > startCount && !done) {
+        done = true; clearTimeout(timer); obs.disconnect(); resolve(true);
+      }
     });
-    obs.observe(SCROLLER, {childList:true, subtree:true});
+    obs.observe(document.body, {childList:true, subtree:true});
   });
 
-  // === Основний цикл ===
+  // ---- ПІДГОТОВКА ----
+  let invited = 0;
+  let firstBtns = findInviteButtons();
+  if (!firstBtns.length) {
+    log('не бачу кнопок — зроби 1 ручний скрол у модалці і перезапусти');
+    // cleanup
+    pauseBtn.remove();
+    window.removeEventListener('keydown', onKey, true);
+    return;
+  }
+
+  const SCROLLER = findScrollerFrom(firstBtns[0]);
+  log('скролер:', SCROLLER === document.scrollingElement ? 'window' : SCROLLER.tagName, '— готово');
+  log('Керування: кнопка справа або P = pause/resume, Q = stop');
+
+  // черга + спостерігач (щоб ловити нові кнопки миттєво)
+  const queue = [];
+  const seen = new WeakSet();
+  const pushNewButtons = () => {
+    const btns = findInviteButtons();
+    for (const b of btns) if (!seen.has(b)) {
+      seen.add(b);
+      queue.push(b);
+      try { b.style.outline='2px solid #22c55e'; } catch {}
+    }
+  };
+  pushNewButtons();
+
+  const mo = new MutationObserver(pushNewButtons);
+  mo.observe(document.body, {childList:true, subtree:true});
+
+  // ---- КЛІКЕР (паралельно) ----
+  const clicker = setInterval(async () => {
+    if (STOPPED) return;
+    if (PAUSED) return;
+
+    const b = queue.shift();
+    if (!b) return;
+
+    try {
+      b.click();
+      invited++;
+      log(`Invited #${invited}`);
+    } catch {}
+    await sleepRespectingPause(CLICK_DELAY_MS);
+  }, 300);
+
+  // ---- РОЗУМНИЙ СКРОЛ (пакетами + паузи + bounce) ----
   const startTime = performance.now();
+  while (!STOPPED && (performance.now() - startTime < HARD_STOP_MS)) {
+    // якщо пауза — чекаємо
+    while (!STOPPED && PAUSED) {
+      await sleep(250);
+    }
+    if (STOPPED) break;
 
-  while (running && performance.now() - startTime < HARD_STOP_MS) {
-    await waitWhilePaused();
-
-    for (let i=0;i<STEPS_PER_BATCH && running;i++) {
-      await waitWhilePaused();
+    // пакет дрібних кроків
+    for (let i=0; i<STEPS_PER_BATCH && !STOPPED; i++){
+      while (!STOPPED && PAUSED) {
+        await sleep(250);
+      }
+      if (STOPPED) break;
 
       const before = SCROLLER.scrollTop;
       const atBottom = Math.ceil(before + SCROLLER.clientHeight) >= SCROLLER.scrollHeight;
+      if (atBottom) SCROLLER.scrollTop = Math.max(0, before - BOUNCE_BACK_PX);
+      else          SCROLLER.scrollTop = before + STEP_PX;
 
-      SCROLLER.scrollTop = atBottom
-        ? Math.max(0, before - BOUNCE_BACK_PX)
-        : before + STEP_PX;
-
+      // легке ворушіння вікна — інколи тригерить підвантаження
       window.scrollBy(0,1); window.scrollBy(0,-1);
-      await sleep(STEP_DELAY_MS);
+
+      await sleepRespectingPause(STEP_DELAY_MS);
     }
 
-    await sleep(REST_AFTER_BATCH_MS);
-    await waitForNewNodes(WAIT_NEW_TIMEOUT_MS);
+    // довша пауза після пакету + чекаємо появу нових елементів
+    await sleepRespectingPause(REST_AFTER_BATCH_MS);
+    if (STOPPED) break;
+
+    // waitForNewButtonsOrTimeout теж поважаємо через паузу
+    // (спрощено: якщо пауза — просто не чекаємо DOM, а "висимо" на паузі)
+    while (!STOPPED && PAUSED) {
+      await sleep(250);
+    }
+    if (STOPPED) break;
+
+    await waitForNewButtonsOrTimeout(WAIT_NEW_TIMEOUT_MS);
+
+    // якщо в черзі нічого, підкидаємо ще
+    if (!queue.length) pushNewButtons();
+
+    // якщо кнопок взагалі не стало — зробимо ще один bounce
+    if (!queue.length && !findInviteButtons().length) {
+      SCROLLER.scrollTop = Math.max(0, SCROLLER.scrollTop - BOUNCE_BACK_PX);
+      await sleepRespectingPause(REST_AFTER_BATCH_MS);
+    }
   }
 
-  log('✅ Скрол завершено');
-  stopBtn.textContent = '✅ Готово';
-  stopBtn.style.background = '#22c55e';
-  pauseBtn.style.display = 'none';
+  // ---- CLEANUP ----
+  clearInterval(clicker);
+  mo.disconnect();
+  window.removeEventListener('keydown', onKey, true);
+  pauseBtn.remove();
+
+  log(STOPPED ? 'ЗУПИНЕНО' : 'ГОТОВО', `Запрошено: ${invited}`);
 })();
